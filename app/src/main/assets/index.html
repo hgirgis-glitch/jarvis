@@ -57,6 +57,7 @@
     <div class="line" id="sources"></div>
     <div class="line" id="status">Initialisiere Systeme</div>
     <form class="bar" id="form">
+      <button class="btn" type="button" id="mic">Sprechen</button>
       <input id="input" placeholder="Schreiben statt sprechen" autocomplete="off">
       <button class="btn" type="submit">Senden</button>
     </form>
@@ -248,6 +249,7 @@
   $("tap").addEventListener("click", () => {
     if (state === "speaking" || state === "listening") native.stop(); else native.listen();
   });
+  $("mic").addEventListener("click", () => { $("status").textContent = "Mikrofon wird gestartet"; native.listen(); });
   $("vaultBtn").addEventListener("click", () => native.pickVault());
   $("form").addEventListener("submit", e => {
     e.preventDefault();

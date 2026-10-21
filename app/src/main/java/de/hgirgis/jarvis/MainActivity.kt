@@ -41,6 +41,14 @@ class MainActivity : AppCompatActivity() {
         if (ok) listen() else ui("status", "Ohne Mikrofon kann ich dich nicht hören.")
     }
 
+    /** Fallback: the system speech dialog (Google), works even when the in-app recognizer fails. */
+    private val speechDialog = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
+        val text = r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
+        if (text.isNullOrBlank()) { ui("state", "idle"); ui("status", "Nichts verstanden. Tippe und versuch es noch einmal.") }
+        else handle(text)
+    }
+    private var useDialog = false
+
     private val pickVault = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -73,8 +81,12 @@ class MainActivity : AppCompatActivity() {
         setContentView(web)
 
         tts = TextToSpeech(this) { code ->
-            if (code == TextToSpeech.SUCCESS) {
-                tts?.language = Locale.GERMANY
+            if (code != TextToSpeech.SUCCESS) {
+                ui("status", "Sprachausgabe nicht verfügbar. Bitte in Android eine Text zu Sprache Engine aktivieren.")
+            } else {
+                val lang = tts?.setLanguage(Locale.GERMANY) ?: TextToSpeech.LANG_NOT_SUPPORTED
+                if (lang == TextToSpeech.LANG_MISSING_DATA || lang == TextToSpeech.LANG_NOT_SUPPORTED)
+                    ui("status", "Deutsche Stimme fehlt. Einstellungen, Allgemeine Verwaltung, Text zu Sprache: Deutsch installieren.")
                 tts?.setSpeechRate(1.0f)
                 tts?.setPitch(0.9f)
                 pickGermanVoice()
@@ -114,21 +126,29 @@ class MainActivity : AppCompatActivity() {
         }
         if (busy) return
         tts?.stop()
+        if (useDialog || !SpeechRecognizer.isRecognitionAvailable(this)) { listenWithDialog(); return }
         if (recognizer == null) {
-            if (!SpeechRecognizer.isRecognitionAvailable(this)) {
-                ui("status", "Keine Spracherkennung auf dem Gerät gefunden.")
-                return
-            }
             recognizer = SpeechRecognizer.createSpeechRecognizer(this).apply { setRecognitionListener(listener) }
         }
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, "de-DE")
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-            putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-        }
-        recognizer?.startListening(intent)
+        val intent = speechIntent().putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        runCatching { recognizer?.startListening(intent) }.onFailure { listenWithDialog(); return }
         ui("state", "listening")
+        ui("status", "Starte Mikrofon")
+    }
+
+    private fun speechIntent() = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "de-DE")
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "de-DE")
+        putExtra(RecognizerIntent.EXTRA_PROMPT, "Ich höre zu, Sir")
+    }
+
+    private fun listenWithDialog() {
+        ui("state", "listening")
+        runCatching { speechDialog.launch(speechIntent()) }.onFailure {
+            ui("state", "idle")
+            ui("status", "Auf dem Handy ist keine Spracherkennung aktiv. Bitte die Google App installieren oder aktualisieren.")
+        }
     }
 
     private val listener = object : RecognitionListener {
@@ -139,8 +159,18 @@ class MainActivity : AppCompatActivity() {
         override fun onEndOfSpeech() = ui("state", "thinking")
         override fun onError(error: Int) {
             ui("state", "idle")
-            ui("status", if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
-                "Ich habe nichts verstanden. Tippe und versuch es noch einmal." else "Spracherkennung Fehler $error")
+            when (error) {
+                SpeechRecognizer.ERROR_NO_MATCH, SpeechRecognizer.ERROR_SPEECH_TIMEOUT ->
+                    ui("status", "Ich habe nichts verstanden. Tippe und versuch es noch einmal.")
+                SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
+                    ui("status", "Mikrofon nicht erlaubt. Bitte in den App Einstellungen das Mikrofon freigeben.")
+                else -> {
+                    // In-app recognizer does not work on this phone: switch to the system dialog for good.
+                    useDialog = true
+                    ui("status", "Spracherkennung Fehler $error, wechsle zum System Dialog")
+                    listenWithDialog()
+                }
+            }
         }
         override fun onResults(results: Bundle?) {
             val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
@@ -174,7 +204,7 @@ class MainActivity : AppCompatActivity() {
     // ---------- speech out ----------
 
     private fun speak(text: String) {
-        if (!ttsReady) { ui("state", "idle"); return }
+        if (!ttsReady) { ui("state", "idle"); ui("status", "Sprachausgabe ist nicht bereit."); return }
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "reply")
     }
 
