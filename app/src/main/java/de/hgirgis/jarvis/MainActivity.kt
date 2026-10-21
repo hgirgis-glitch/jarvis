@@ -21,7 +21,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import java.util.Locale
 
@@ -193,8 +195,11 @@ class MainActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val hits = vault.search(text)
             ui("sources", hits.joinToString(" · ") { it.note.title })
-            val reply = runCatching { brain.answer(text, hits) }
-                .getOrElse { "Da ist etwas schiefgegangen: ${it.message}" }
+            val reply = runCatching { withTimeout(25_000) { brain.answer(text, hits) } }
+                .getOrElse {
+                    if (it is TimeoutCancellationException) "Gemini Nano hat nicht rechtzeitig geantwortet. Auf diesem Handy ist das lokale Modell offenbar nicht nutzbar."
+                    else "Da ist etwas schiefgegangen: ${it.message}"
+                }
             busy = false
             ui("reply", reply)
             speak(reply)

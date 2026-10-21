@@ -9,7 +9,7 @@
   * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
   html, body { width: 100%; height: 100%; background: #000; overflow: hidden;
     font-family: "Rajdhani", "Roboto Condensed", system-ui, sans-serif; color: var(--c); }
-  canvas { position: fixed; inset: 0; display: block; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
   .hud { position: fixed; inset: 0; pointer-events: none; display: flex; flex-direction: column;
     justify-content: space-between; padding: max(18px, env(safe-area-inset-top)) 18px max(18px, env(safe-area-inset-bottom)); }
   .top { display: flex; justify-content: space-between; align-items: flex-start; font-size: 12px;
@@ -31,7 +31,7 @@
     padding: 0 14px; border-radius: 4px; font: inherit; font-size: 13px; letter-spacing: .15em; text-transform: uppercase; }
   .btn:active { background: rgba(47,230,255,.2); }
   #vaultBtn { pointer-events: auto; margin-top: 6px; }
-  .tap { position: fixed; left: 50%; top: 46%; width: 56vmin; height: 56vmin; transform: translate(-50%, -50%);
+  .tap { position: fixed; left: 50%; top: 50%; width: 56vmin; height: 56vmin; transform: translate(-50%, -50%);
     border-radius: 50%; pointer-events: auto; }
 </style>
 </head>
@@ -184,7 +184,7 @@
 
   function resize() {
     const w = window.innerWidth, h = window.innerHeight;
-    renderer.setSize(w, h, false);
+    renderer.setSize(w, h, true);
     camera.aspect = w / h;
     // keep the orb fully visible on the narrow cover screen and the wide inner screen
     camera.position.z = Math.max(7, 5.6 / Math.max(w / h, 0.4));
