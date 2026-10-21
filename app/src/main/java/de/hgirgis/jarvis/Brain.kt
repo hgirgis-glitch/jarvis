@@ -26,7 +26,7 @@ class Brain(private val status: (String) -> Unit) {
                 model.download().collect { s ->
                     when (s) {
                         is DownloadStatus.DownloadStarted -> status("Download gestartet")
-                        is DownloadStatus.DownloadProgress -> status("Download läuft")
+                        is DownloadStatus.DownloadProgress -> status("Lade Gemini Nano: ${s.totalBytesDownloaded / 1_000_000} MB")
                         is DownloadStatus.DownloadFailed -> status("Download fehlgeschlagen")
                         DownloadStatus.DownloadCompleted -> {
                             ready = true
@@ -40,10 +40,10 @@ class Brain(private val status: (String) -> Unit) {
         if (ready) runCatching { model.warmup() }
     }
 
-    suspend fun answer(question: String, notes: List<Vault.Hit>): String {
+    suspend fun answer(question: String, context: String): String {
         if (!ready) prepare()
         if (!ready) return "Mein Sprachmodell ist noch nicht bereit."
-        val prompt = buildPrompt(question, notes)
+        val prompt = buildPrompt(question, context)
         val response = model.generateContent(
             generateContentRequest(TextPart(prompt)) {
                 temperature = 0.3f
@@ -57,7 +57,7 @@ class Brain(private val status: (String) -> Unit) {
         return text
     }
 
-    private fun buildPrompt(question: String, notes: List<Vault.Hit>): String {
+    private fun buildPrompt(question: String, context: String): String {
         val now = SimpleDateFormat("EEEE, d. MMMM yyyy, HH:mm", Locale.GERMANY).format(Date())
         val sb = StringBuilder()
         sb.append(
@@ -67,10 +67,7 @@ class Brain(private val status: (String) -> Unit) {
                 "Erfinde nichts.\n"
         )
         sb.append("Aktuelle Zeit: ").append(now).append("\n")
-        if (notes.isNotEmpty()) {
-            sb.append("\nPassende Ausschnitte aus Hanis Obsidian Notizen:\n")
-            for (h in notes) sb.append("[").append(h.note.title).append("] ").append(h.snippet).append("\n")
-        }
+        if (context.isNotBlank()) sb.append("\nGefundene Informationen:\n").append(context.take(5000)).append("\n")
         if (history.isNotEmpty()) {
             sb.append("\nBisheriges Gespräch:\n")
             for ((q, a) in history) sb.append("Hani: ").append(q.take(300)).append("\nJARVIS: ").append(a.take(400)).append("\n")
@@ -78,5 +75,53 @@ class Brain(private val status: (String) -> Unit) {
         sb.append("\nHani: ").append(question).append("\nJARVIS:")
         // The Prompt API accepts less than about 4000 tokens; stay well below.
         return if (sb.length > 9000) sb.substring(sb.length - 9000) else sb.toString()
+    }
+}
+
+/**
+ * Gemini Nano cannot call tools reliably, so JARVIS decides by keywords what to look up
+ * and hands the result to Nano as context. Read only.
+ */
+class NanoRouter(private val tools: Tools) {
+
+    suspend fun gather(question: String): String {
+        val q = question.lowercase()
+        val out = StringBuilder()
+        val today = java.time.LocalDate.now()
+        if (CAL.any { q.contains(it) }) {
+            val (from, to) = when {
+                q.contains("übermorgen") -> today.plusDays(2) to today.plusDays(2)
+                q.contains("morgen") -> today.plusDays(1) to today.plusDays(1)
+                q.contains("heute") -> today to today
+                q.contains("nächste woche") -> today.plusDays(7L - today.dayOfWeek.value + 1) to today.plusDays(14L - today.dayOfWeek.value)
+                else -> today to today.plusDays(7)
+            }
+            out.append("Kalender ").append(from).append(" bis ").append(to).append(": ")
+                .append(tools.run("kalender_lesen", org.json.JSONObject().put("von_datum", from.toString()).put("bis_datum", to.toString())))
+                .append("\n")
+        }
+        if (MAIL.any { q.contains(it) }) {
+            val from = Regex("von ([\\p{L}.@-]+)").find(q)?.groupValues?.get(1)
+            val query = if (from != null) "from:$from" else keywords(q).ifBlank { "newer_than:3d" }
+            out.append("Gmail Treffer: ").append(tools.run("mails_suchen", org.json.JSONObject().put("suchanfrage", query))).append("\n")
+        }
+        if (DRIVE.any { q.contains(it) }) {
+            out.append("Drive Treffer: ").append(tools.run("drive_suchen", org.json.JSONObject().put("suchbegriff", keywords(q)))).append("\n")
+        }
+        if (out.isEmpty()) {
+            out.append("Obsidian Notizen: ").append(tools.run("notizen_suchen", org.json.JSONObject().put("suchbegriff", question))).append("\n")
+        }
+        return out.toString()
+    }
+
+    private fun keywords(q: String) = q.split(Regex("[^\\p{L}\\p{N}]+"))
+        .filter { it.length >= 4 && it !in IGNORE }.take(3).joinToString(" ")
+
+    companion object {
+        private val CAL = listOf("termin", "kalender", "meeting", "besprechung", "verabredung", "was steht", "was habe ich", "zeit")
+        private val MAIL = listOf("mail", "nachricht von", "posteingang", "geschrieben")
+        private val DRIVE = listOf("drive", "dokument", "datei", "pdf", "tabelle", "präsentation")
+        private val IGNORE = setOf("mail", "mails", "email", "e-mail", "suche", "such", "finde", "zeig", "zeige", "bitte", "meine",
+            "meinen", "meinem", "drive", "dokument", "datei", "dateien", "jarvis", "letzte", "letzten", "neue", "neuen", "habe", "gibt")
     }
 }

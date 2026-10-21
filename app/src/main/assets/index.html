@@ -33,6 +33,25 @@
   #vaultBtn { pointer-events: auto; margin-top: 6px; }
   .tap { position: fixed; left: 50%; top: 50%; width: 56vmin; height: 56vmin; transform: translate(-50%, -50%);
     border-radius: 50%; pointer-events: auto; }
+  .panel { position: fixed; inset: 0; background: rgba(0, 6, 10, .94); display: none; overflow: auto;
+    padding: max(20px, env(safe-area-inset-top)) 18px 24px; z-index: 10; }
+  .panel.open { display: block; }
+  .panel h2 { font-size: 16px; letter-spacing: .4em; margin-bottom: 18px; text-shadow: 0 0 10px var(--c); }
+  .row { border: 1px solid rgba(47,230,255,.25); border-radius: 6px; padding: 14px; margin: 0 auto 12px; max-width: 640px; }
+  .row h3 { font-size: 13px; letter-spacing: .2em; text-transform: uppercase; margin-bottom: 8px; }
+  .row p { font-size: 14px; color: #bfe9f5; line-height: 1.45; margin-bottom: 10px; }
+  .row .ok { color: #5cffc8; } .row .no { color: var(--c2); }
+  .row input, .row select { width: 100%; background: rgba(0,20,30,.8); border: 1px solid rgba(47,230,255,.35);
+    color: #e9fbff; padding: 11px 12px; border-radius: 4px; font: inherit; font-size: 15px; margin-bottom: 10px; }
+  .row .btn { padding: 11px 14px; }
+  .confirm { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); width: min(92vw, 520px);
+    background: rgba(0, 14, 20, .95); border: 1px solid var(--c2); border-radius: 8px; padding: 18px;
+    box-shadow: 0 0 30px rgba(255,154,47,.35); display: none; z-index: 20; text-align: center; }
+  .confirm.open { display: block; }
+  .confirm p { color: #ffe3c4; font-size: 17px; line-height: 1.4; margin-bottom: 16px; }
+  .confirm .btn { padding: 12px 18px; margin: 0 6px; }
+  .confirm .yes { border-color: var(--c2); color: var(--c2); }
+  #gear { pointer-events: auto; margin-left: 6px; }
 </style>
 </head>
 <body>
@@ -48,7 +67,8 @@
       <div>Kern: Nano</div>
       <div>Vault: <span id="vault">nicht verbunden</span></div>
       <div class="state" id="state">Bereitschaft</div>
-      <button class="btn" id="vaultBtn">Vault wählen</button>
+      <div>Gehirn: <span id="brainLbl">?</span></div>
+      <button class="btn" id="vaultBtn">Vault wählen</button><button class="btn" id="gear">Einstellungen</button>
     </div>
   </div>
   <div class="bottom">
@@ -64,11 +84,49 @@
   </div>
 </div>
 
+<div class="confirm" id="confirm">
+  <p id="confirmText"></p>
+  <button class="btn" id="no">Abbrechen</button><button class="btn yes" id="yes">Bestätigen</button>
+</div>
+
+<div class="panel" id="panel">
+  <h2>EINSTELLUNGEN</h2>
+  <div class="row">
+    <h3>Gehirn</h3>
+    <p>Gemini Schlüssel: schnell, klug, kann Kalender, Mails und Drive durchsuchen. Kostenlos, aber Google darf Anfragen im Gratis Tarif zum Training nutzen. Gemini Nano: läuft nur auf dem Handy, privat, aber schwach und muss erst geladen werden.</p>
+    <select id="brainSel"><option value="gemini">Gemini (Schlüssel)</option><option value="nano">Gemini Nano (auf dem Handy)</option></select>
+    <input id="key" placeholder="Gemini API Schlüssel einfügen" autocomplete="off" spellcheck="false">
+    <input id="model" placeholder="Modell" autocomplete="off" spellcheck="false">
+    <button class="btn" id="saveBrain">Speichern</button>
+    <p id="keyState" style="margin-top:10px"></p>
+  </div>
+  <div class="row">
+    <h3>Kalender</h3>
+    <p>Liest den Kalender direkt vom Handy, auch deinen Google Kalender. Termine legt JARVIS nur nach Bestätigung an.</p>
+    <p id="calState"></p>
+    <button class="btn" id="calBtn">Kalender erlauben</button>
+  </div>
+  <div class="row">
+    <h3>Gmail und Drive</h3>
+    <p>Nur lesen. Braucht einmalig den OAuth Client in der Google Cloud (Anleitung im Chat).</p>
+    <p id="gState"></p>
+    <button class="btn" id="gBtn">Mit Google verbinden</button>
+  </div>
+  <div class="row">
+    <h3>Obsidian</h3>
+    <p id="vState"></p>
+    <button class="btn" id="vBtn">Vault wählen</button>
+  </div>
+  <div class="row" style="text-align:center"><button class="btn" id="close">Schließen</button></div>
+</div>
+
 <script src="three.min.js"></script>
 <script>
 (function () {
   const $ = id => document.getElementById(id);
-  const native = window.Android || { listen() {}, ask() {}, stop() {}, pickVault() {} };
+  const native = window.Android || { listen() {}, ask() {}, stop() {}, pickVault() {}, settings() { return "{}"; },
+    set() {}, connectGoogle() {}, grantCalendar() {}, confirm() {} };
+  const BRAIN_LABEL = { gemini: "Gemini", nano: "Nano" };
   const STATE_LABEL = { idle: "Bereitschaft", listening: "Höre zu", thinking: "Denke nach", speaking: "Spreche" };
   const STATE_COLOR = { idle: 0x2fe6ff, listening: 0x5cffc8, thinking: 0xff9a2f, speaking: 0x2fe6ff };
 
@@ -238,6 +296,11 @@
         $("vaultBtn").textContent = "Vault ändern";
       } else if (kind === "sources") {
         $("sources").textContent = value ? "Quellen: " + value : "";
+      } else if (kind === "confirm") {
+        $("confirmText").textContent = value;
+        $("confirm").classList.add("open");
+      } else if (kind === "google" || kind === "calendar") {
+        refreshSettings();
       } else if (kind === "user" || kind === "reply" || kind === "status") {
         $(kind).textContent = value;
       }
@@ -251,6 +314,36 @@
   });
   $("mic").addEventListener("click", () => { $("status").textContent = "Mikrofon wird gestartet"; native.listen(); });
   $("vaultBtn").addEventListener("click", () => native.pickVault());
+
+  function answer(ok) { $("confirm").classList.remove("open"); native.confirm(ok); }
+  $("yes").addEventListener("click", () => answer(true));
+  $("no").addEventListener("click", () => answer(false));
+
+  function refreshSettings() {
+    let st = {};
+    try { st = JSON.parse(native.settings()); } catch (e) {}
+    $("brainLbl").textContent = BRAIN_LABEL[st.brain] || "?";
+    $("brainSel").value = st.brain || "gemini";
+    $("model").value = st.gemini_model || "";
+    $("keyState").innerHTML = st.gemini_key_set ? '<span class="ok">Schlüssel gespeichert</span>' : '<span class="no">Kein Schlüssel hinterlegt</span>';
+    $("calState").innerHTML = st.calendar ? '<span class="ok">Erlaubt</span>' : '<span class="no">Nicht erlaubt</span>';
+    $("gState").innerHTML = st.google ? '<span class="ok">Verbunden</span>' : '<span class="no">Nicht verbunden</span>';
+    $("vState").innerHTML = st.vault ? '<span class="ok">' + st.vault + ' Notizen geladen</span>' : '<span class="no">Kein Vault gewählt</span>';
+  }
+  $("gear").addEventListener("click", () => { refreshSettings(); $("panel").classList.add("open"); });
+  $("close").addEventListener("click", () => $("panel").classList.remove("open"));
+  $("saveBrain").addEventListener("click", () => {
+    const k = $("key").value.trim();
+    if (k) native.set("gemini_key", k);
+    if ($("model").value.trim()) native.set("gemini_model", $("model").value.trim());
+    native.set("brain", $("brainSel").value);
+    $("key").value = "";
+    setTimeout(refreshSettings, 200);
+  });
+  $("calBtn").addEventListener("click", () => native.grantCalendar());
+  $("gBtn").addEventListener("click", () => native.connectGoogle());
+  $("vBtn").addEventListener("click", () => native.pickVault());
+  refreshSettings();
   $("form").addEventListener("submit", e => {
     e.preventDefault();
     const v = $("input").value.trim();

@@ -13,9 +13,11 @@ class Vault(private val context: Context) {
     data class Hit(val note: Note, val snippet: String, val score: Int)
 
     private var notes: List<Note> = emptyList()
+    private var tree: Uri? = null
     val size get() = notes.size
 
     suspend fun load(treeUri: Uri): Int = withContext(Dispatchers.IO) {
+        tree = treeUri
         val result = ArrayList<Note>()
         val rootId = DocumentsContract.getTreeDocumentId(treeUri)
         walk(treeUri, rootId, "", result)
@@ -70,6 +72,25 @@ class Vault(private val context: Context) {
             }
             if (score == 0) null else Hit(n, snippet(n, terms), score)
         }.sortedByDescending { it.score }.take(limit).toList()
+    }
+
+    fun read(title: String): Note? {
+        val t = title.lowercase().removeSuffix(".md")
+        return notes.firstOrNull { it.title.lowercase() == t }
+            ?: notes.firstOrNull { it.title.lowercase().contains(t) }
+    }
+
+    /** Creates a new note in the vault root. Needs write access to the picked folder. */
+    suspend fun create(title: String, content: String): String = withContext(Dispatchers.IO) {
+        val treeUri = tree ?: return@withContext "Kein Vault verbunden."
+        val clean = title.replace(Regex("[\\\\/:*?\"<>|]"), " ").trim().ifEmpty { "Notiz" }
+        val parent = DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+        val doc = runCatching {
+            DocumentsContract.createDocument(context.contentResolver, parent, "text/markdown", "$clean.md")
+        }.getOrNull() ?: return@withContext "Notiz konnte nicht angelegt werden. Bitte den Vault in den Einstellungen neu wählen."
+        context.contentResolver.openOutputStream(doc)?.use { it.write(content.toByteArray(Charsets.UTF_8)) }
+        notes = notes + Note(clean, "$clean.md", content, (clean + "\n" + content).lowercase())
+        "Notiz $clean angelegt."
     }
 
     private fun countOf(text: String, term: String): Int {

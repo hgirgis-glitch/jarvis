@@ -20,7 +20,9 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.activity.result.IntentSenderRequest
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
@@ -32,6 +34,12 @@ class MainActivity : AppCompatActivity() {
     private lateinit var web: WebView
     private lateinit var vault: Vault
     private lateinit var brain: Brain
+    private lateinit var calendar: Calendar
+    private lateinit var google: Google
+    private lateinit var tools: Tools
+    private lateinit var gemini: GeminiBrain
+    private lateinit var router: NanoRouter
+    private var pendingConfirm: CompletableDeferred<Boolean>? = null
     private var tts: TextToSpeech? = null
     private var recognizer: SpeechRecognizer? = null
     private var ttsReady = false
@@ -53,11 +61,25 @@ class MainActivity : AppCompatActivity() {
 
     private val pickVault = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            runCatching { contentResolver.takePersistableUriPermission(uri, flags) }
+                .onFailure { contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
             prefs.edit().putString("vault", uri.toString()).apply()
             loadVault(uri)
         }
     }
+
+    private val askCalendar = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { r ->
+        ui("calendar", if (r[Manifest.permission.READ_CALENDAR] == true) "verbunden" else "nicht erlaubt")
+    }
+
+    private val googleConsent = registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { r ->
+        val ok = google.onConsent(r.data)
+        ui("google", if (ok) "verbunden" else "nicht verbunden")
+        ui("status", if (ok) "Google verbunden. Gmail und Drive sind bereit." else "Google Anmeldung abgebrochen.")
+    }
+
+    private val brainMode get() = prefs.getString("brain", null) ?: if (prefs.getString("gemini_key", "").isNullOrBlank()) "nano" else "gemini"
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -71,6 +93,11 @@ class MainActivity : AppCompatActivity() {
 
         vault = Vault(this)
         brain = Brain { msg -> ui("status", msg) }
+        calendar = Calendar(this)
+        google = Google(this)
+        tools = Tools(vault, calendar, google, ::confirmAction) { src -> if (src.isNotBlank()) ui("sources", src) }
+        gemini = GeminiBrain({ prefs.getString("gemini_key", "") ?: "" }, { prefs.getString("gemini_model", null) ?: DEFAULT_MODEL }, tools)
+        router = NanoRouter(tools)
 
         web = WebView(this).apply {
             setBackgroundColor(0xFF000000.toInt())
@@ -98,10 +125,20 @@ class MainActivity : AppCompatActivity() {
         }
 
         lifecycleScope.launch {
-            runCatching { brain.prepare() }.onFailure { ui("status", "Gemini Nano Fehler: ${it.message}") }
-            if (brain.ready) ui("status", "Bereit. Tippe auf den Kern und sprich.")
+            if (brainMode == "nano") {
+                runCatching { brain.prepare() }.onFailure { ui("status", "Gemini Nano Fehler: ${it.message}") }
+            }
+            ui("status", "Bereit. Tippe auf den Kern oder auf Sprechen.")
+            if (prefs.getBoolean("google_connected", false)) {
+                val needsConsent = runCatching { google.authorize() }.getOrNull()
+                ui("google", if (needsConsent == null) "verbunden" else "erneut anmelden")
+            }
         }
         prefs.getString("vault", null)?.let { loadVault(Uri.parse(it)) }
+        if (!hasCalendar() && !prefs.getBoolean("asked_calendar", false)) {
+            prefs.edit().putBoolean("asked_calendar", true).apply()
+            askCalendar.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
+        }
     }
 
     private fun pickGermanVoice() {
@@ -192,19 +229,60 @@ class MainActivity : AppCompatActivity() {
         busy = true
         ui("user", text)
         ui("state", "thinking")
+        ui("sources", "")
         lifecycleScope.launch {
-            val hits = vault.search(text)
-            ui("sources", hits.joinToString(" · ") { it.note.title })
-            val reply = runCatching { withTimeout(25_000) { brain.answer(text, hits) } }
-                .getOrElse {
-                    if (it is TimeoutCancellationException) "Gemini Nano hat nicht rechtzeitig geantwortet. Auf diesem Handy ist das lokale Modell offenbar nicht nutzbar."
-                    else "Da ist etwas schiefgegangen: ${it.message}"
+            val reply = runCatching {
+                if (brainMode == "gemini") gemini.answer(text)
+                else {
+                    if (!brain.ready) "Gemini Nano wird noch auf das Handy geladen. Bis dahin kann ich nicht antworten. " +
+                        "Schneller geht es mit einem Gemini Schlüssel in den Einstellungen."
+                    else withTimeout(30_000) { brain.answer(text, router.gather(text)) }
                 }
+            }.getOrElse {
+                if (it is TimeoutCancellationException) "Gemini Nano hat nicht rechtzeitig geantwortet. Bitte in den Einstellungen auf Gemini Schlüssel umstellen."
+                else "Da ist etwas schiefgegangen: ${it.message}"
+            }
             busy = false
             ui("reply", reply)
             speak(reply)
         }
     }
+
+    private fun hasCalendar() =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.READ_CALENDAR) == PackageManager.PERMISSION_GRANTED
+
+    /** Shows a confirmation card in the app and waits for the answer. */
+    private suspend fun confirmAction(text: String): Boolean {
+        val d = CompletableDeferred<Boolean>()
+        pendingConfirm = d
+        ui("confirm", text)
+        ui("state", "idle")
+        if (ttsReady) tts?.speak("Bitte bestätigen, Sir.", TextToSpeech.QUEUE_FLUSH, null, "confirm")
+        val ok = d.await()
+        ui("state", "thinking")
+        return ok
+    }
+
+    private fun connectGoogle() {
+        lifecycleScope.launch {
+            val intent = runCatching { google.authorize() }.getOrElse {
+                ui("status", "Google Anmeldung fehlgeschlagen: ${it.message}. Ist der OAuth Client in der Google Cloud angelegt?")
+                return@launch
+            }
+            prefs.edit().putBoolean("google_connected", true).apply()
+            if (intent == null) { ui("google", "verbunden"); ui("status", "Google verbunden.") }
+            else googleConsent.launch(IntentSenderRequest.Builder(intent.intentSender).build())
+        }
+    }
+
+    private fun settingsJson() = JSONObject().apply {
+        put("brain", brainMode)
+        put("gemini_key_set", !prefs.getString("gemini_key", "").isNullOrBlank())
+        put("gemini_model", prefs.getString("gemini_model", null) ?: DEFAULT_MODEL)
+        put("calendar", hasCalendar())
+        put("google", prefs.getBoolean("google_connected", false))
+        put("vault", vault.size)
+    }.toString()
 
     // ---------- speech out ----------
 
@@ -230,6 +308,21 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface fun stop() = runOnUiThread {
             tts?.stop(); recognizer?.cancel(); ui("state", "idle")
         }
+        @JavascriptInterface fun settings(): String = settingsJson()
+        @JavascriptInterface fun set(key: String, value: String) = runOnUiThread {
+            if (key in setOf("brain", "gemini_key", "gemini_model")) {
+                prefs.edit().putString(key, value.trim()).apply()
+                if (key == "brain" && value == "nano") lifecycleScope.launch { runCatching { brain.prepare() } }
+                if (key == "brain") gemini.reset()
+            }
+        }
+        @JavascriptInterface fun connectGoogle() = runOnUiThread { this@MainActivity.connectGoogle() }
+        @JavascriptInterface fun grantCalendar() = runOnUiThread {
+            askCalendar.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
+        }
+        @JavascriptInterface fun confirm(ok: Boolean) = runOnUiThread {
+            pendingConfirm?.complete(ok); pendingConfirm = null
+        }
         @JavascriptInterface fun pickVault() = runOnUiThread {
             val hint = Uri.parse("content://com.android.externalstorage.documents/document/primary%3ADocuments")
             pickVault.launch(hint)
@@ -240,6 +333,10 @@ class MainActivity : AppCompatActivity() {
         js("window.jarvis && jarvis.on(${JSONObject.quote(kind)}, ${JSONObject.quote(value)})")
 
     private fun js(code: String) = runOnUiThread { if (::web.isInitialized) web.evaluateJavascript(code, null) }
+
+    companion object {
+        const val DEFAULT_MODEL = "gemini-flash-latest"
+    }
 
     override fun onDestroy() {
         recognizer?.destroy()
