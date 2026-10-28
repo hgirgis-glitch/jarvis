@@ -35,7 +35,7 @@ class GeminiVoice(private val key: () -> String, private val voice: () -> String
     private suspend fun request(model: String, apiKey: String, text: String): Http.Response {
         val body = JSONObject()
             .put("contents", JSONArray().put(JSONObject().put("parts", JSONArray().put(
-                JSONObject().put("text", "Sprich ruhig, souverän und freundlich auf Deutsch: $text")))))
+                JSONObject().put("text", "Sprich ruhig, souverän und freundlich, in der Sprache des Textes: $text")))))
             .put("generationConfig", JSONObject()
                 .put("responseModalities", JSONArray().put("AUDIO"))
                 .put("speechConfig", JSONObject().put("voiceConfig", JSONObject().put("prebuiltVoiceConfig",

@@ -52,6 +52,7 @@
   .confirm .btn { padding: 12px 18px; margin: 0 6px; }
   .confirm .yes { border-color: var(--c2); color: var(--c2); }
   #gear { pointer-events: auto; margin-left: 6px; }
+  #updateBtn { display: none; pointer-events: auto; border-color: var(--c2); color: var(--c2); margin-top: 6px; }
 </style>
 </head>
 <body>
@@ -69,6 +70,7 @@
       <div class="state" id="state">Bereitschaft</div>
       <div>Gehirn: <span id="brainLbl">?</span></div>
       <button class="btn" id="vaultBtn">Vault wählen</button><button class="btn" id="gear">Einstellungen</button>
+      <div><button class="btn" id="updateBtn">Update</button></div>
     </div>
   </div>
   <div class="bottom">
@@ -97,6 +99,7 @@
     <select id="brainSel"><option value="gemini">Gemini (Schlüssel)</option><option value="nano">Gemini Nano (auf dem Handy)</option></select>
     <input id="key" placeholder="Gemini API Schlüssel einfügen" autocomplete="off" spellcheck="false">
     <input id="model" placeholder="Modell" autocomplete="off" spellcheck="false">
+    <input id="langs" placeholder="Sprachen, z.B. de-DE,en-US,ar-EG" autocomplete="off" spellcheck="false">
     <input id="voiceName" placeholder="Stimme, z.B. Charon, Orus, Kore, Puck, Sulafat" autocomplete="off" spellcheck="false">
     <button class="btn" id="saveBrain">Speichern</button>
     <p id="keyState" style="margin-top:10px"></p>
@@ -106,6 +109,8 @@
     <p>Zeigt, ob JARVIS Google erreicht, und welche App Version läuft.</p>
     <pre id="diag" style="white-space:pre-wrap;color:#bfe9f5;font-size:13px;margin-bottom:10px"></pre>
     <button class="btn" id="diagBtn">Verbindung testen</button>
+    <button class="btn" id="reportBtn">Fehlerbericht kopieren</button>
+    <p id="ver" style="margin-top:10px"></p>
   </div>
   <div class="row">
     <h3>Kalender</h3>
@@ -132,7 +137,7 @@
 (function () {
   const $ = id => document.getElementById(id);
   const native = window.Android || { listen() {}, ask() {}, stop() {}, pickVault() {}, settings() { return "{}"; },
-    set() {}, diagnose() {}, connectGoogle() {}, grantCalendar() {}, confirm() {} };
+    set() {}, diagnose() {}, copyReport() {}, installUpdate() {}, connectGoogle() {}, grantCalendar() {}, confirm() {} };
   const BRAIN_LABEL = { gemini: "Gemini", nano: "Nano" };
   const STATE_LABEL = { idle: "Bereitschaft", listening: "Höre zu", thinking: "Denke nach", speaking: "Spreche" };
   const STATE_COLOR = { idle: 0x2fe6ff, listening: 0x5cffc8, thinking: 0xff9a2f, speaking: 0x2fe6ff };
@@ -306,6 +311,9 @@
       } else if (kind === "confirm") {
         $("confirmText").textContent = value;
         $("confirm").classList.add("open");
+      } else if (kind === "update") {
+        $("updateBtn").style.display = "inline-block";
+        $("updateBtn").textContent = value;
       } else if (kind === "diag") {
         $("diag").textContent = value;
       } else if (kind === "google" || kind === "calendar") {
@@ -335,6 +343,8 @@
     $("brainSel").value = st.brain || "gemini";
     $("model").value = st.gemini_model || "";
     $("voiceName").value = st.gemini_voice || "";
+    $("langs").value = st.languages || "";
+    $("ver").textContent = st.version ? "App Version " + st.version : "";
     $("keyState").innerHTML = st.gemini_key_set ? '<span class="ok">Schlüssel gespeichert</span>' : '<span class="no">Kein Schlüssel hinterlegt</span>';
     $("calState").innerHTML = st.calendar ? '<span class="ok">Erlaubt</span>' : '<span class="no">Nicht erlaubt</span>';
     $("gState").innerHTML = st.google ? '<span class="ok">Verbunden</span>' : '<span class="no">Nicht verbunden</span>';
@@ -346,12 +356,15 @@
     const k = $("key").value.trim();
     if (k) native.set("gemini_key", k);
     if ($("model").value.trim()) native.set("gemini_model", $("model").value.trim());
+    if ($("langs").value.trim()) native.set("languages", $("langs").value.trim());
     if ($("voiceName").value.trim()) native.set("gemini_voice", $("voiceName").value.trim());
     native.set("brain", $("brainSel").value);
     $("key").value = "";
     setTimeout(refreshSettings, 200);
   });
   $("diagBtn").addEventListener("click", () => native.diagnose());
+  $("reportBtn").addEventListener("click", () => native.copyReport());
+  $("updateBtn").addEventListener("click", () => native.installUpdate());
   $("calBtn").addEventListener("click", () => native.grantCalendar());
   $("gBtn").addEventListener("click", () => native.connectGoogle());
   $("vBtn").addEventListener("click", () => native.pickVault());

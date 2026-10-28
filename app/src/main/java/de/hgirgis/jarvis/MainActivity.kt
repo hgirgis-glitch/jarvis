@@ -138,6 +138,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         prefs.getString("vault", null)?.let { loadVault(Uri.parse(it)) }
+        checkUpdate()
         if (!hasCalendar() && !prefs.getBoolean("asked_calendar", false)) {
             prefs.edit().putBoolean("asked_calendar", true).apply()
             askCalendar.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
@@ -180,9 +181,62 @@ class MainActivity : AppCompatActivity() {
 
     private fun speechIntent() = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE, "de-DE")
-        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, "de-DE")
+        val langs = languages()
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE, langs.first())
+        putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, langs.first())
         putExtra(RecognizerIntent.EXTRA_PROMPT, "Ich höre zu, Sir")
+        if (langs.size > 1 && android.os.Build.VERSION.SDK_INT >= 34) {
+            // Android 14+: let the recognizer detect which of the allowed languages is spoken.
+            putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
+            putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_DETECTION_ALLOWED_LANGUAGES, ArrayList(langs))
+            putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_SWITCH, RecognizerIntent.LANGUAGE_SWITCH_BALANCED)
+            putStringArrayListExtra(RecognizerIntent.EXTRA_LANGUAGE_SWITCH_ALLOWED_LANGUAGES, ArrayList(langs))
+        }
+    }
+
+    private fun languages(): List<String> =
+        (prefs.getString("languages", null) ?: "de-DE,en-US").split(",").map { it.trim() }.filter { it.isNotEmpty() }
+            .ifEmpty { listOf("de-DE") }
+
+    private var pendingUpdate: Updater.Update? = null
+
+    private fun checkUpdate() {
+        lifecycleScope.launch {
+            val u = Updater(this@MainActivity).check() ?: return@launch
+            pendingUpdate = u
+            ui("update", "Neue Version ${u.versionName} verfügbar")
+        }
+    }
+
+    private fun installUpdate() {
+        val u = pendingUpdate ?: return
+        if (!packageManager.canRequestPackageInstalls()) {
+            ui("status", "Bitte JARVIS einmalig erlauben, Apps zu installieren, dann noch einmal auf Update tippen.")
+            startActivity(Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+            return
+        }
+        lifecycleScope.launch {
+            val err = Updater(this@MainActivity).install(u) { p -> ui("update", "Lade Update: $p %") }
+            ui("update", err ?: "Installation gestartet")
+        }
+    }
+
+    private fun report(): String {
+        val pi = packageManager.getPackageInfo(packageName, 0)
+        return buildString {
+            append("JARVIS Fehlerbericht\n")
+            append("Version ${pi.versionName} (${pi.longVersionCode}), Android ${android.os.Build.VERSION.RELEASE}, ${android.os.Build.MODEL}\n")
+            append("Gehirn: $brainMode, Modell: ${prefs.getString("gemini_model", null) ?: DEFAULT_MODEL}, ")
+            append("Schlüssel: ${if (prefs.getString("gemini_key", "").isNullOrBlank()) "fehlt" else "vorhanden"}, ")
+            append("Sprachen: ${languages().joinToString()}, Vault: ${vault.size} Notizen, Kalender: ${hasCalendar()}\n")
+            append("--- Verlauf ---\n").append(EventLog.dump())
+        }
+    }
+
+    private fun copyReport() {
+        val cm = getSystemService(android.content.ClipboardManager::class.java)
+        cm.setPrimaryClip(android.content.ClipData.newPlainText("JARVIS Fehlerbericht", report()))
+        ui("status", "Fehlerbericht kopiert. Füge ihn einfach im Chat mit Claude ein.")
     }
 
     private fun listenWithDialog() {
@@ -309,6 +363,8 @@ class MainActivity : AppCompatActivity() {
         put("gemini_key_set", !prefs.getString("gemini_key", "").isNullOrBlank())
         put("gemini_model", prefs.getString("gemini_model", null) ?: DEFAULT_MODEL)
         put("gemini_voice", prefs.getString("gemini_voice", null) ?: GeminiVoice.DEFAULT_VOICE)
+        put("languages", languages().joinToString(","))
+        put("version", packageManager.getPackageInfo(packageName, 0).versionName)
         put("calendar", hasCalendar())
         put("google", prefs.getBoolean("google_connected", false))
         put("vault", vault.size)
@@ -352,12 +408,14 @@ class MainActivity : AppCompatActivity() {
         }
         @JavascriptInterface fun settings(): String = settingsJson()
         @JavascriptInterface fun set(key: String, value: String) = runOnUiThread {
-            if (key in setOf("brain", "gemini_key", "gemini_model", "gemini_voice")) {
+            if (key in setOf("brain", "gemini_key", "gemini_model", "gemini_voice", "languages")) {
                 prefs.edit().putString(key, value.trim()).apply()
                 if (key == "brain" && value == "nano") lifecycleScope.launch { runCatching { brain.prepare() } }
                 if (key == "brain") gemini.reset()
             }
         }
+        @JavascriptInterface fun copyReport() = runOnUiThread { this@MainActivity.copyReport() }
+        @JavascriptInterface fun installUpdate() = runOnUiThread { this@MainActivity.installUpdate() }
         @JavascriptInterface fun diagnose() = runOnUiThread { this@MainActivity.diagnose() }
         @JavascriptInterface fun connectGoogle() = runOnUiThread { this@MainActivity.connectGoogle() }
         @JavascriptInterface fun grantCalendar() = runOnUiThread {
@@ -372,8 +430,10 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun ui(kind: String, value: String) =
+    private fun ui(kind: String, value: String): Unit {
+        if (kind != "diag") EventLog.add(kind, value)
         js("window.jarvis && jarvis.on(${JSONObject.quote(kind)}, ${JSONObject.quote(value)})")
+    }
 
     private fun js(code: String) = runOnUiThread { if (::web.isInitialized) web.evaluateJavascript(code, null) }
 

@@ -66,7 +66,7 @@ class Brain(private val status: (String) -> Unit) {
         val now = SimpleDateFormat("EEEE, d. MMMM yyyy, HH:mm", Locale.GERMANY).format(Date())
         val sb = StringBuilder()
         sb.append(
-            "Du bist JARVIS, der persönliche KI Assistent von Hani. Antworte immer auf Deutsch, " +
+            "Du bist JARVIS, der persönliche KI Assistent von Hani. Antworte in der Sprache der Frage, meist Deutsch, " +
                 "höflich, knapp und präzise in höchstens vier Sätzen, ohne Aufzählungszeichen und ohne Markdown, " +
                 "denn deine Antwort wird vorgelesen. Nutze ausschließlich die gefundenen Informationen unten. " +
                 "Steht die Antwort dort nicht, sage genau: Das weiß ich nicht. Erfinde niemals Fakten, Zahlen, " +
