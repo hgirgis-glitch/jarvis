@@ -97,7 +97,7 @@ class MainActivity : AppCompatActivity() {
         calendar = Calendar(this)
         google = Google(this)
         tools = Tools(vault, calendar, google, ::confirmAction) { src -> if (src.isNotBlank()) ui("sources", src) }
-        gemini = GeminiBrain({ prefs.getString("gemini_key", "") ?: "" }, { prefs.getString("gemini_model", null) ?: DEFAULT_MODEL }, tools)
+        gemini = GeminiBrain({ prefs.getString("gemini_key", "") ?: "" }, { prefs.getString("gemini_model", null) ?: DEFAULT_MODEL }, tools) { msg -> ui("status", msg) }
         router = NanoRouter(tools)
         voice = GeminiVoice({ prefs.getString("gemini_key", "") ?: "" }, { prefs.getString("gemini_voice", null) ?: GeminiVoice.DEFAULT_VOICE })
 
@@ -234,14 +234,14 @@ class MainActivity : AppCompatActivity() {
         ui("sources", "")
         lifecycleScope.launch {
             val reply = runCatching {
-                if (brainMode == "gemini") gemini.answer(text)
+                if (brainMode == "gemini") withTimeout(70_000) { gemini.answer(text) }
                 else {
                     if (!brain.ready) "Gemini Nano wird noch auf das Handy geladen. Bis dahin kann ich nicht antworten. " +
                         "Schneller geht es mit einem Gemini Schlüssel in den Einstellungen."
                     else withTimeout(30_000) { brain.answer(text, router.gather(text)) }
                 }
             }.getOrElse {
-                if (it is TimeoutCancellationException) "Gemini Nano hat nicht rechtzeitig geantwortet. Bitte in den Einstellungen auf Gemini Schlüssel umstellen."
+                if (it is TimeoutCancellationException) (if (brainMode == "gemini") "Gemini hat nicht rechtzeitig geantwortet. Meist ist das Gratis Limit erreicht, bitte in einer Minute noch einmal fragen." else "Gemini Nano hat nicht rechtzeitig geantwortet. Bitte in den Einstellungen auf Gemini Schlüssel umstellen.")
                 else "Da ist etwas schiefgegangen: ${it.message}"
             }
             busy = false

@@ -8,7 +8,12 @@ import java.util.Date
 import java.util.Locale
 
 /** Gemini over the internet with function calling. Needs an API key from Google AI Studio. */
-class GeminiBrain(private val key: () -> String, private val model: () -> String, private val tools: Tools) {
+class GeminiBrain(
+    private val key: () -> String,
+    private val model: () -> String,
+    private val tools: Tools,
+    private val status: (String) -> Unit = {},
+) {
 
     private val history = ArrayList<JSONObject>()
 
@@ -32,6 +37,7 @@ class GeminiBrain(private val key: () -> String, private val model: () -> String
                 .put("contents", contents)
                 .put("tools", toolList(search))
                 .put("generationConfig", JSONObject().put("temperature", 0.4))
+            status(if (search) "Frage Gemini, mit Google Suche" else "Frage Gemini ($currentModel)")
             val r = Http.post(url, body.toString(), mapOf("x-goog-api-key" to apiKey))
             if (r.code == 400 && search) { search = false; return@repeat }  // model without search plus functions: retry without
             if (r.code == 429) {

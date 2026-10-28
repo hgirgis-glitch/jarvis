@@ -24,7 +24,7 @@ object Http {
             try {
                 c.requestMethod = method
                 c.connectTimeout = 15_000
-                c.readTimeout = 60_000
+                c.readTimeout = 25_000
                 headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
                 if (body != null) {
                     c.doOutput = true
