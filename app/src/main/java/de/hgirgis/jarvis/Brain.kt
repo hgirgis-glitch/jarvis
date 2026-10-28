@@ -41,6 +41,11 @@ class Brain(private val status: (String) -> Unit) {
     }
 
     suspend fun answer(question: String, context: String): String {
+        // Never let the small model guess: without real data from the phone there is no answer.
+        NanoRouter.unsupported(question)?.let { return it }
+        if (context.isBlank()) {
+            return "Dazu finde ich in deinem Kalender und deinen Notizen nichts, Sir. Ich erfinde lieber nichts."
+        }
         if (!ready) prepare()
         if (!ready) return "Mein Sprachmodell ist noch nicht bereit."
         val prompt = buildPrompt(question, context)
@@ -63,8 +68,9 @@ class Brain(private val status: (String) -> Unit) {
         sb.append(
             "Du bist JARVIS, der persönliche KI Assistent von Hani. Antworte immer auf Deutsch, " +
                 "höflich, knapp und präzise in höchstens vier Sätzen, ohne Aufzählungszeichen und ohne Markdown, " +
-                "denn deine Antwort wird vorgelesen. Wenn dir Informationen fehlen, sag das ehrlich. " +
-                "Erfinde nichts.\n"
+                "denn deine Antwort wird vorgelesen. Nutze ausschließlich die gefundenen Informationen unten. " +
+                "Steht die Antwort dort nicht, sage genau: Das weiß ich nicht. Erfinde niemals Fakten, Zahlen, " +
+                "Termine oder Namen und nutze kein eigenes Weltwissen.\n"
         )
         sb.append("Aktuelle Zeit: ").append(now).append("\n")
         if (context.isNotBlank()) sb.append("\nGefundene Informationen:\n").append(context.take(5000)).append("\n")
@@ -109,7 +115,8 @@ class NanoRouter(private val tools: Tools) {
             out.append("Drive Treffer: ").append(tools.run("drive_suchen", org.json.JSONObject().put("suchbegriff", keywords(q)))).append("\n")
         }
         if (out.isEmpty()) {
-            out.append("Obsidian Notizen: ").append(tools.run("notizen_suchen", org.json.JSONObject().put("suchbegriff", question))).append("\n")
+            val notes = tools.run("notizen_suchen", org.json.JSONObject().put("suchbegriff", question))
+            if (notes.optInt("anzahl", 0) > 0) out.append("Obsidian Notizen: ").append(notes).append("\n")
         }
         return out.toString()
     }
@@ -118,6 +125,17 @@ class NanoRouter(private val tools: Tools) {
         .filter { it.length >= 4 && it !in IGNORE }.take(3).joinToString(" ")
 
     companion object {
+        private val UNSUPPORTED = listOf("wetter", "regen", "temperatur", "nachrichten", "aktie", "börse", "kurs", "fußball",
+            "ergebnis", "verkehr", "stau", "bitcoin", "news")
+
+        /** Topics that need live internet data, which the on-device brain does not have. */
+        fun unsupported(question: String): String? {
+            val q = question.lowercase()
+            return if (UNSUPPORTED.any { q.contains(it) })
+                "Dafür habe ich keine Datenquelle, Sir. Ich kann nur Kalender, Notizen und mit Google Anmeldung Mails und Drive durchsuchen, und ich rate nicht."
+            else null
+        }
+
         private val CAL = listOf("termin", "kalender", "meeting", "besprechung", "verabredung", "was steht", "was habe ich", "zeit")
         private val MAIL = listOf("mail", "nachricht von", "posteingang", "geschrieben")
         private val DRIVE = listOf("drive", "dokument", "datei", "pdf", "tabelle", "präsentation")
