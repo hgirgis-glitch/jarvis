@@ -106,6 +106,11 @@ class NanoRouter(private val tools: Tools) {
                 .append(tools.run("kalender_lesen", org.json.JSONObject().put("von_datum", from.toString()).put("bis_datum", to.toString())))
                 .append("\n")
         }
+        if (WEATHER.any { q.contains(it) }) {
+            val place = Regex("(?:in|für|fuer) ([A-ZÄÖÜ][\\p{L}-]+)").find(question)?.groupValues?.get(1) ?: "Hamburg"
+            out.append("Wettervorhersage (Open-Meteo, heute ist ").append(today).append("): ")
+                .append(tools.run("wetter", org.json.JSONObject().put("ort", place))).append("\n")
+        }
         if (MAIL.any { q.contains(it) }) {
             val from = Regex("von ([\\p{L}.@-]+)").find(q)?.groupValues?.get(1)
             val query = if (from != null) "from:$from" else keywords(q).ifBlank { "newer_than:3d" }
@@ -125,7 +130,7 @@ class NanoRouter(private val tools: Tools) {
         .filter { it.length >= 4 && it !in IGNORE }.take(3).joinToString(" ")
 
     companion object {
-        private val UNSUPPORTED = listOf("wetter", "regen", "temperatur", "nachrichten", "aktie", "börse", "kurs", "fußball",
+        private val UNSUPPORTED = listOf("nachrichten", "aktie", "börse", "kurs", "fußball",
             "ergebnis", "verkehr", "stau", "bitcoin", "news")
 
         /** Topics that need live internet data, which the on-device brain does not have. */
@@ -136,6 +141,7 @@ class NanoRouter(private val tools: Tools) {
             else null
         }
 
+        private val WEATHER = listOf("wetter", "regen", "temperatur", "sonne", "schnee", "gewitter", "grad ")
         private val CAL = listOf("termin", "kalender", "meeting", "besprechung", "verabredung", "was steht", "was habe ich", "zeit")
         private val MAIL = listOf("mail", "nachricht von", "posteingang", "geschrieben")
         private val DRIVE = listOf("drive", "dokument", "datei", "pdf", "tabelle", "präsentation")

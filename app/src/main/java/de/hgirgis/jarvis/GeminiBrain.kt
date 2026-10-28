@@ -27,7 +27,7 @@ class GeminiBrain(
         val userTurn = JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", question)))
         contents.put(userTurn)
 
-        var search = true
+        var search = false  // Google Search runs as its own tool (web_suche), not mixed with the function tools
         var currentModel = model().trim()
         var fallbackUsed = false
         var waited = false
@@ -75,6 +75,32 @@ class GeminiBrain(
         return "Das war mir zu viele Schritte auf einmal. Frag bitte etwas genauer."
     }
 
+    /** Own request with only the Google Search tool, so it works on every model that supports grounding. */
+    suspend fun webSearch(question: String): String {
+        val apiKey = key().trim()
+        if (apiKey.isEmpty()) return "Kein Gemini Schlüssel hinterlegt."
+        var m = model().trim()
+        var last = "keine Antwort"
+        repeat(3) { attempt ->
+            val body = JSONObject()
+                .put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray().put(
+                    JSONObject().put("text", "Beantworte sachlich, kurz und auf Deutsch mit aktuellen Fakten aus der Suche: $question")))))
+                .put("tools", JSONArray().put(JSONObject().put("google_search", JSONObject())))
+            val r = Http.post("https://generativelanguage.googleapis.com/v1beta/models/${URLEncoder.encode(m, "UTF-8")}:generateContent",
+                body.toString(), mapOf("x-goog-api-key" to apiKey))
+            if (r.ok) {
+                val parts = JSONObject(r.body).optJSONArray("candidates")?.optJSONObject(0)
+                    ?.optJSONObject("content")?.optJSONArray("parts")
+                val text = parts?.let { a -> (0 until a.length()).joinToString("") { a.getJSONObject(it).optString("text") } }.orEmpty().trim()
+                return text.ifEmpty { "Die Suche hat nichts geliefert." }
+            }
+            last = "Suche Fehler ${r.code}"
+            if (r.code in listOf(429, 500, 502, 503, 504, 400, 404) && m != FALLBACK_MODEL) m = FALLBACK_MODEL
+            else kotlinx.coroutines.delay(2000L * (attempt + 1))
+        }
+        return last
+    }
+
     private fun toolList(search: Boolean) = JSONArray().apply {
         put(JSONObject().put("functionDeclarations", Tools.declarations))
         if (search) put(JSONObject().put("google_search", JSONObject()))
@@ -108,9 +134,9 @@ class GeminiBrain(
             Nutze die Werkzeuge, um in Kalender, Gmail, Google Drive und den Obsidian Notizen nachzusehen, statt zu raten.
             Bei relativen Angaben wie morgen oder nächste Woche rechne das Datum selbst aus.
             Schreibende Aktionen (Termin oder Notiz anlegen) nur, wenn Hani das ausdrücklich will; die App fragt ihn dann um Bestätigung.
-            Du beantwortest alle Fragen von Hani. Für aktuelle Dinge wie Wetter, Nachrichten, Kurse, Ergebnisse oder Öffnungszeiten
-            nutzt du die Google Suche, und für Allgemeinwissen dein eigenes Wissen. Frage bei Wetter nach dem Ort, wenn er fehlt;
-            Hani wohnt in Hamburg. Persönliche Fakten über Hani, seine Termine, Mails, Dateien oder Notizen nennst du nur, wenn ein
+            Du beantwortest alle Fragen von Hani. Bei Wetterfragen rufst du das Werkzeug wetter auf (Standardort Hamburg, wo Hani wohnt).
+            Für andere aktuelle Dinge wie Nachrichten, Kurse, Ergebnisse oder Öffnungszeiten rufst du web_suche auf, und für
+            Allgemeinwissen nutzt du dein eigenes Wissen. Sage nie, dir fehle ein Werkzeug für Wetter oder Internet. Persönliche Fakten über Hani, seine Termine, Mails, Dateien oder Notizen nennst du nur, wenn ein
             Werkzeug sie geliefert hat. Kennzeichne Unsicheres als unsicher und erfinde keine Zahlen.
             Du kannst keine Mails senden, nichts löschen und nichts bezahlen. Sag das ehrlich, wenn danach gefragt wird.
             Wenn ein Werkzeug einen Fehler meldet, erkläre kurz, was Hani tun muss.

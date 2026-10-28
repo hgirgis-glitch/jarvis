@@ -14,6 +14,7 @@ class Tools(
     private val google: Google,
     private val confirm: suspend (String) -> Boolean,
     private val sources: (String) -> Unit,
+    private val webSearch: suspend (String) -> String,
 ) {
 
     suspend fun run(name: String, args: JSONObject): JSONObject = try {
@@ -37,6 +38,8 @@ class Tools(
             "mail_lesen" -> { sources("Gmail"); JSONObject().put("ergebnis", google.readMail(args.getString("id"))) }
             "drive_suchen" -> { sources("Drive"); ok(google.searchDrive(args.getString("suchbegriff"))) }
             "drive_datei_lesen" -> { sources("Drive"); JSONObject().put("ergebnis", google.readDrive(args.getString("id"))) }
+            "wetter" -> { sources("Open-Meteo"); Weather.forecast(args.optString("ort")) }
+            "web_suche" -> { sources("Google Suche"); JSONObject().put("ergebnis", webSearch(args.getString("frage"))) }
             "notizen_suchen" -> {
                 val hits = vault.search(args.getString("suchbegriff"), 5)
                 sources(hits.joinToString(" · ") { it.note.title })
@@ -73,6 +76,10 @@ class Tools(
 
         /** Function declarations in the Gemini API format. */
         val declarations: JSONArray = JSONArray().apply {
+            put(fn("wetter", "Wettervorhersage für heute und die nächsten 6 Tage an einem Ort (Standard Hamburg). Immer nutzen bei Wetterfragen.",
+                mapOf("ort" to p("string", "Ortsname, z.B. Hamburg")), emptyList()))
+            put(fn("web_suche", "Sucht aktuelle Informationen im Internet mit Google (Nachrichten, Kurse, Ergebnisse, Öffnungszeiten, Fakten).",
+                mapOf("frage" to p("string", "Die Suchfrage, vollständig formuliert")), listOf("frage")))
             put(fn("kalender_lesen", "Liest Termine aus Hanis Kalender für einen Zeitraum.",
                 mapOf("von_datum" to p("string", "Startdatum YYYY-MM-DD"), "bis_datum" to p("string", "Enddatum YYYY-MM-DD, inklusive")),
                 listOf("von_datum")))

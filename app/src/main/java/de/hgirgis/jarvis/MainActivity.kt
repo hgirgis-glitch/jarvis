@@ -97,7 +97,7 @@ class MainActivity : AppCompatActivity() {
         brain = Brain { msg -> ui("status", msg) }
         calendar = Calendar(this)
         google = Google(this)
-        tools = Tools(vault, calendar, google, ::confirmAction) { src -> if (src.isNotBlank()) ui("sources", src) }
+        tools = Tools(vault, calendar, google, ::confirmAction, { src -> if (src.isNotBlank()) ui("sources", src) }, { q -> gemini.webSearch(q) })
         gemini = GeminiBrain({ prefs.getString("gemini_key", "") ?: "" }, { prefs.getString("gemini_model", null) ?: DEFAULT_MODEL }, tools) { msg -> ui("status", msg) }
         router = NanoRouter(tools)
         voice = GeminiVoice({ prefs.getString("gemini_key", "") ?: "" }, { prefs.getString("gemini_voice", null) ?: GeminiVoice.DEFAULT_VOICE })
