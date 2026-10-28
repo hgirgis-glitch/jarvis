@@ -102,6 +102,12 @@
     <p id="keyState" style="margin-top:10px"></p>
   </div>
   <div class="row">
+    <h3>Verbindung</h3>
+    <p>Zeigt, ob JARVIS Google erreicht, und welche App Version läuft.</p>
+    <pre id="diag" style="white-space:pre-wrap;color:#bfe9f5;font-size:13px;margin-bottom:10px"></pre>
+    <button class="btn" id="diagBtn">Verbindung testen</button>
+  </div>
+  <div class="row">
     <h3>Kalender</h3>
     <p>Liest den Kalender direkt vom Handy, auch deinen Google Kalender. Termine legt JARVIS nur nach Bestätigung an.</p>
     <p id="calState"></p>
@@ -126,7 +132,7 @@
 (function () {
   const $ = id => document.getElementById(id);
   const native = window.Android || { listen() {}, ask() {}, stop() {}, pickVault() {}, settings() { return "{}"; },
-    set() {}, connectGoogle() {}, grantCalendar() {}, confirm() {} };
+    set() {}, diagnose() {}, connectGoogle() {}, grantCalendar() {}, confirm() {} };
   const BRAIN_LABEL = { gemini: "Gemini", nano: "Nano" };
   const STATE_LABEL = { idle: "Bereitschaft", listening: "Höre zu", thinking: "Denke nach", speaking: "Spreche" };
   const STATE_COLOR = { idle: 0x2fe6ff, listening: 0x5cffc8, thinking: 0xff9a2f, speaking: 0x2fe6ff };
@@ -300,6 +306,8 @@
       } else if (kind === "confirm") {
         $("confirmText").textContent = value;
         $("confirm").classList.add("open");
+      } else if (kind === "diag") {
+        $("diag").textContent = value;
       } else if (kind === "google" || kind === "calendar") {
         refreshSettings();
       } else if (kind === "user" || kind === "reply" || kind === "status") {
@@ -343,6 +351,7 @@
     $("key").value = "";
     setTimeout(refreshSettings, 200);
   });
+  $("diagBtn").addEventListener("click", () => native.diagnose());
   $("calBtn").addEventListener("click", () => native.grantCalendar());
   $("gBtn").addEventListener("click", () => native.connectGoogle());
   $("vBtn").addEventListener("click", () => native.pickVault());

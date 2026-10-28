@@ -25,6 +25,7 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.json.JSONObject
 import java.util.Locale
@@ -279,6 +280,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun diagnose() {
+        ui("diag", "Teste Verbindung")
+        lifecycleScope.launch {
+            val cm = getSystemService(android.net.ConnectivityManager::class.java)
+            val caps = cm.getNetworkCapabilities(cm.activeNetwork)
+            val net = when {
+                caps == null -> "kein aktives Netz"
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> "WLAN"
+                caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> "Mobilfunk"
+                else -> "anderes Netz"
+            } + (if (caps?.hasTransport(android.net.NetworkCapabilities.TRANSPORT_VPN) == true) " mit VPN" else "") +
+                (if (caps?.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true) ", Internet bestätigt" else ", Internet nicht bestätigt")
+            val out = StringBuilder("Version ${packageManager.getPackageInfo(packageName, 0).versionName}\nNetz: $net\nDatensparmodus: ${cm.restrictBackgroundStatus}\n")
+            for (u in listOf("https://www.google.com/generate_204", "https://generativelanguage.googleapis.com/")) {
+                val host = java.net.URL(u).host
+                val dns = runCatching { withContext(kotlinx.coroutines.Dispatchers.IO) { java.net.InetAddress.getAllByName(host).size } }
+                val http = runCatching { Http.get(u).code }
+                out.append(host).append(": DNS ").append(dns.fold({ "ok ($it Adressen)" }, { "FEHLER ${it.javaClass.simpleName}" }))
+                    .append(", HTTP ").append(http.fold({ "$it" }, { "FEHLER ${it.javaClass.simpleName}" })).append("\n")
+            }
+            ui("diag", out.toString())
+        }
+    }
+
     private fun settingsJson() = JSONObject().apply {
         put("brain", brainMode)
         put("gemini_key_set", !prefs.getString("gemini_key", "").isNullOrBlank())
@@ -333,6 +358,7 @@ class MainActivity : AppCompatActivity() {
                 if (key == "brain") gemini.reset()
             }
         }
+        @JavascriptInterface fun diagnose() = runOnUiThread { this@MainActivity.diagnose() }
         @JavascriptInterface fun connectGoogle() = runOnUiThread { this@MainActivity.connectGoogle() }
         @JavascriptInterface fun grantCalendar() = runOnUiThread {
             askCalendar.launch(arrayOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR))
