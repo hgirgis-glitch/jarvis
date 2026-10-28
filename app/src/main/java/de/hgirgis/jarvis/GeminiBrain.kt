@@ -22,9 +22,11 @@ class GeminiBrain(private val key: () -> String, private val model: () -> String
         val userTurn = JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", question)))
         contents.put(userTurn)
 
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/${URLEncoder.encode(model().trim(), "UTF-8")}:generateContent"
         var search = true
-        repeat(MAX_STEPS) {
+        var currentModel = model().trim()
+        var fallbackUsed = false
+        repeat(MAX_STEPS + 2) {
+            val url = "https://generativelanguage.googleapis.com/v1beta/models/${URLEncoder.encode(currentModel, "UTF-8")}:generateContent"
             val body = JSONObject()
                 .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system()))))
                 .put("contents", contents)
@@ -32,6 +34,11 @@ class GeminiBrain(private val key: () -> String, private val model: () -> String
                 .put("generationConfig", JSONObject().put("temperature", 0.4))
             val r = Http.post(url, body.toString(), mapOf("x-goog-api-key" to apiKey))
             if (r.code == 400 && search) { search = false; return@repeat }  // model without search plus functions: retry without
+            if (r.code == 429) {
+                // Free tier is tight: first drop the search tool, then switch to the lighter model.
+                if (search) { search = false; return@repeat }
+                if (!fallbackUsed && currentModel != FALLBACK_MODEL) { fallbackUsed = true; currentModel = FALLBACK_MODEL; return@repeat }
+            }
             if (!r.ok) return explain(r)
             val content = JSONObject(r.body).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")
                 ?: return "Gemini hat keine Antwort geliefert."
@@ -73,7 +80,7 @@ class GeminiBrain(private val key: () -> String, private val model: () -> String
         return when (r.code) {
             400, 403 -> "Gemini lehnt den Schlüssel oder die Anfrage ab: $msg"
             404 -> "Das Gemini Modell ${model()} gibt es nicht. Bitte in den Einstellungen ein anderes eintragen."
-            429 -> "Das kostenlose Gemini Kontingent ist gerade aufgebraucht. Bitte später noch einmal."
+            429 -> "Das kostenlose Gemini Kontingent ist aufgebraucht. Google schreibt: ${msg.take(220)}"
             else -> "Gemini Fehler ${r.code}: $msg"
         }
     }
@@ -99,5 +106,6 @@ class GeminiBrain(private val key: () -> String, private val model: () -> String
 
     companion object {
         private const val MAX_STEPS = 6
+        private const val FALLBACK_MODEL = "gemini-flash-lite-latest"
     }
 }
