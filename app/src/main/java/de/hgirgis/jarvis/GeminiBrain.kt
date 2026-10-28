@@ -30,6 +30,7 @@ class GeminiBrain(
         var search = true
         var currentModel = model().trim()
         var fallbackUsed = false
+        var waited = false
         repeat(MAX_STEPS + 2) {
             val url = "https://generativelanguage.googleapis.com/v1beta/models/${URLEncoder.encode(currentModel, "UTF-8")}:generateContent"
             val body = JSONObject()
@@ -40,6 +41,11 @@ class GeminiBrain(
             status(if (search) "Frage Gemini, mit Google Suche" else "Frage Gemini ($currentModel)")
             val r = Http.post(url, body.toString(), mapOf("x-goog-api-key" to apiKey))
             if (r.code == 400 && search) { search = false; return@repeat }  // model without search plus functions: retry without
+            if (r.code in 500..504) {
+                // Model overloaded on Google's side: switch to the lighter model, otherwise wait a moment once.
+                if (!fallbackUsed && currentModel != FALLBACK_MODEL) { fallbackUsed = true; currentModel = FALLBACK_MODEL; return@repeat }
+                if (!waited) { waited = true; status("Gemini ist überlastet, versuche es gleich noch einmal"); kotlinx.coroutines.delay(3000); return@repeat }
+            }
             if (r.code == 429) {
                 // Free tier is tight: first drop the search tool, then switch to the lighter model.
                 if (search) { search = false; return@repeat }
@@ -85,6 +91,7 @@ class GeminiBrain(
         val msg = runCatching { JSONObject(r.body).getJSONObject("error").getString("message") }.getOrDefault(r.body.take(200))
         return when (r.code) {
             400, 403 -> "Gemini lehnt den Schlüssel oder die Anfrage ab: $msg"
+            500, 502, 503, 504 -> "Gemini ist bei Google gerade überlastet, Sir. Bitte in ein bis zwei Minuten noch einmal fragen."
             404 -> "Das Gemini Modell ${model()} gibt es nicht. Bitte in den Einstellungen ein anderes eintragen."
             429 -> "Das kostenlose Gemini Kontingent ist aufgebraucht. Google schreibt: ${msg.take(220)}"
             else -> "Gemini Fehler ${r.code}: $msg"
