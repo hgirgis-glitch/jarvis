@@ -75,6 +75,29 @@ class GeminiBrain(
         return "Das war mir zu viele Schritte auf einmal. Frag bitte etwas genauer."
     }
 
+    /** Speech to text with Gemini, used when the phone's own recognizer fails. Any language. */
+    suspend fun transcribe(wav: ByteArray): String? {
+        val apiKey = key().trim()
+        if (apiKey.isEmpty()) return null
+        val audio = android.util.Base64.encodeToString(wav, android.util.Base64.NO_WRAP)
+        var m = model().trim()
+        repeat(3) { attempt ->
+            val body = JSONObject().put("contents", JSONArray().put(JSONObject().put("role", "user").put("parts", JSONArray()
+                .put(JSONObject().put("inlineData", JSONObject().put("mimeType", "audio/wav").put("data", audio)))
+                .put(JSONObject().put("text", "Schreibe exakt auf, was in dieser Aufnahme gesagt wird, in der gesprochenen Sprache. " +
+                    "Gib nur den gesprochenen Text aus, ohne Anführungszeichen. Wenn nichts Verständliches gesagt wird, gib nichts aus.")))))
+                .put("generationConfig", JSONObject().put("temperature", 0.0))
+            val r = Http.post("https://generativelanguage.googleapis.com/v1beta/models/${URLEncoder.encode(m, "UTF-8")}:generateContent",
+                body.toString(), mapOf("x-goog-api-key" to apiKey))
+            if (r.ok) {
+                val parts = JSONObject(r.body).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")?.optJSONArray("parts")
+                return parts?.let { a -> (0 until a.length()).joinToString("") { a.getJSONObject(it).optString("text") } }?.trim()
+            }
+            if (m != FALLBACK_MODEL) m = FALLBACK_MODEL else kotlinx.coroutines.delay(1500L * (attempt + 1))
+        }
+        return null
+    }
+
     /** Own request with only the Google Search tool, so it works on every model that supports grounding. */
     suspend fun webSearch(question: String): String {
         val apiKey = key().trim()

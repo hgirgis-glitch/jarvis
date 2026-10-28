@@ -53,13 +53,12 @@ class MainActivity : AppCompatActivity() {
         if (ok) listen() else ui("status", "Ohne Mikrofon kann ich dich nicht hören.")
     }
 
-    /** Fallback: the system speech dialog (Google), works even when the in-app recognizer fails. */
-    private val speechDialog = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { r ->
-        val text = r.data?.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS)?.firstOrNull()
-        if (text.isNullOrBlank()) { ui("state", "idle"); ui("status", "Nichts verstanden. Tippe und versuch es noch einmal.") }
-        else handle(text)
-    }
-    private var useDialog = false
+    private val capture = AudioCapture()
+    private var capturing = false
+    /** Which recognizer works on this phone; tried in order, the last one is our own recording plus Gemini. */
+    private var engine: Int
+        get() = prefs.getInt("stt_engine", 0)
+        set(v) = prefs.edit().putInt("stt_engine", v).apply()
 
     private val pickVault = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -167,16 +166,55 @@ class MainActivity : AppCompatActivity() {
             askMic.launch(Manifest.permission.RECORD_AUDIO)
             return
         }
-        if (busy) return
+        if (busy || capturing) return
         tts?.stop(); voice.stop()
-        if (useDialog || !SpeechRecognizer.isRecognitionAvailable(this)) { listenWithDialog(); return }
-        if (recognizer == null) {
-            recognizer = SpeechRecognizer.createSpeechRecognizer(this).apply { setRecognitionListener(listener) }
-        }
-        val intent = speechIntent().putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        runCatching { recognizer?.startListening(intent) }.onFailure { listenWithDialog(); return }
+        // Always start from a fresh recognizer: reusing one is the usual cause of error 5 (ERROR_CLIENT).
+        recognizer?.destroy(); recognizer = null
+        val candidates = recognizers()
+        if (engine >= candidates.size) { listenWithGemini(); return }
+        val r = runCatching { candidates[engine]() }.getOrNull()
+        if (r == null) { engine += 1; listen(); return }
+        recognizer = r.apply { setRecognitionListener(listener) }
         ui("state", "listening")
         ui("status", "Starte Mikrofon")
+        web.postDelayed({
+            runCatching { recognizer?.startListening(speechIntent().putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)) }
+                .onFailure { engine += 1; listen() }
+        }, 120)
+    }
+
+    /** Speech services to try, best first. Samsung often defaults to its own service, which fails with error 5. */
+    private fun recognizers(): List<() -> SpeechRecognizer?> {
+        val list = ArrayList<() -> SpeechRecognizer?>()
+        val google = android.content.ComponentName("com.google.android.googlequicksearchbox",
+            "com.google.android.voicesearch.serviceapi.GoogleRecognitionService")
+        val hasGoogle = runCatching { packageManager.getServiceInfo(google, 0) }.isSuccess
+        if (hasGoogle) list += { SpeechRecognizer.createSpeechRecognizer(this, google) }
+        if (SpeechRecognizer.isOnDeviceRecognitionAvailable(this)) list += { SpeechRecognizer.createOnDeviceSpeechRecognizer(this) }
+        if (SpeechRecognizer.isRecognitionAvailable(this)) list += { SpeechRecognizer.createSpeechRecognizer(this) }
+        return list
+    }
+
+    /** Last resort and fully in the JARVIS look: record ourselves and let Gemini transcribe. */
+    private fun listenWithGemini() {
+        if (prefs.getString("gemini_key", "").isNullOrBlank()) {
+            ui("state", "idle")
+            ui("status", "Die Spracherkennung des Handys geht nicht. Bitte Gemini Schlüssel eintragen oder unten schreiben.")
+            return
+        }
+        capturing = true
+        ui("state", "listening")
+        ui("status", "Ich höre zu")
+        lifecycleScope.launch {
+            val wav = runCatching { capture.record { lvl -> js("window.jarvis && jarvis.level($lvl)") } }.getOrNull()
+            capturing = false
+            if (wav == null) { ui("state", "idle"); ui("status", "Ich habe nichts gehört. Tippe und sprich einfach los."); return@launch }
+            ui("state", "thinking")
+            ui("status", "Verstehe")
+            val text = runCatching { gemini.transcribe(wav) }.getOrNull()
+            if (text.isNullOrBlank()) { ui("state", "idle"); ui("status", "Ich habe dich nicht verstanden. Bitte noch einmal."); return@launch }
+            handle(text)
+        }
     }
 
     private fun speechIntent() = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
@@ -184,7 +222,6 @@ class MainActivity : AppCompatActivity() {
         val langs = languages()
         putExtra(RecognizerIntent.EXTRA_LANGUAGE, langs.first())
         putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, langs.first())
-        putExtra(RecognizerIntent.EXTRA_PROMPT, "Ich höre zu, Sir")
         if (langs.size > 1 && android.os.Build.VERSION.SDK_INT >= 34) {
             // Android 14+: let the recognizer detect which of the allowed languages is spoken.
             putExtra(RecognizerIntent.EXTRA_ENABLE_LANGUAGE_DETECTION, true)
@@ -239,13 +276,6 @@ class MainActivity : AppCompatActivity() {
         ui("status", "Fehlerbericht kopiert. Füge ihn einfach im Chat mit Claude ein.")
     }
 
-    private fun listenWithDialog() {
-        ui("state", "listening")
-        runCatching { speechDialog.launch(speechIntent()) }.onFailure {
-            ui("state", "idle")
-            ui("status", "Auf dem Handy ist keine Spracherkennung aktiv. Bitte die Google App installieren oder aktualisieren.")
-        }
-    }
 
     private val listener = object : RecognitionListener {
         override fun onReadyForSpeech(params: Bundle?) = ui("status", "Ich höre zu")
@@ -261,10 +291,11 @@ class MainActivity : AppCompatActivity() {
                 SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS ->
                     ui("status", "Mikrofon nicht erlaubt. Bitte in den App Einstellungen das Mikrofon freigeben.")
                 else -> {
-                    // In-app recognizer does not work on this phone: switch to the system dialog for good.
-                    useDialog = true
-                    ui("status", "Spracherkennung Fehler $error, wechsle zum System Dialog")
-                    listenWithDialog()
+                    // This speech service does not work on this phone: remember and try the next one silently.
+                    EventLog.add("stt", "Dienst $engine Fehler $error")
+                    engine += 1
+                    recognizer?.destroy(); recognizer = null
+                    web.postDelayed({ listen() }, 250)
                 }
             }
         }
@@ -404,7 +435,7 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface fun listen() = runOnUiThread { this@MainActivity.listen() }
         @JavascriptInterface fun ask(text: String) = runOnUiThread { if (text.isNotBlank()) handle(text.trim()) }
         @JavascriptInterface fun stop() = runOnUiThread {
-            tts?.stop(); voice.stop(); recognizer?.cancel(); ui("state", "idle")
+            tts?.stop(); voice.stop(); recognizer?.cancel(); capture.stop(); ui("state", "idle")
         }
         @JavascriptInterface fun settings(): String = settingsJson()
         @JavascriptInterface fun set(key: String, value: String) = runOnUiThread {
