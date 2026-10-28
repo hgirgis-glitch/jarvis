@@ -39,6 +39,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tools: Tools
     private lateinit var gemini: GeminiBrain
     private lateinit var router: NanoRouter
+    private lateinit var voice: GeminiVoice
     private var pendingConfirm: CompletableDeferred<Boolean>? = null
     private var tts: TextToSpeech? = null
     private var recognizer: SpeechRecognizer? = null
@@ -98,6 +99,7 @@ class MainActivity : AppCompatActivity() {
         tools = Tools(vault, calendar, google, ::confirmAction) { src -> if (src.isNotBlank()) ui("sources", src) }
         gemini = GeminiBrain({ prefs.getString("gemini_key", "") ?: "" }, { prefs.getString("gemini_model", null) ?: DEFAULT_MODEL }, tools)
         router = NanoRouter(tools)
+        voice = GeminiVoice({ prefs.getString("gemini_key", "") ?: "" }, { prefs.getString("gemini_voice", null) ?: GeminiVoice.DEFAULT_VOICE })
 
         web = WebView(this).apply {
             setBackgroundColor(0xFF000000.toInt())
@@ -164,7 +166,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         if (busy) return
-        tts?.stop()
+        tts?.stop(); voice.stop()
         if (useDialog || !SpeechRecognizer.isRecognitionAvailable(this)) { listenWithDialog(); return }
         if (recognizer == null) {
             recognizer = SpeechRecognizer.createSpeechRecognizer(this).apply { setRecognitionListener(listener) }
@@ -279,6 +281,7 @@ class MainActivity : AppCompatActivity() {
         put("brain", brainMode)
         put("gemini_key_set", !prefs.getString("gemini_key", "").isNullOrBlank())
         put("gemini_model", prefs.getString("gemini_model", null) ?: DEFAULT_MODEL)
+        put("gemini_voice", prefs.getString("gemini_voice", null) ?: GeminiVoice.DEFAULT_VOICE)
         put("calendar", hasCalendar())
         put("google", prefs.getBoolean("google_connected", false))
         put("vault", vault.size)
@@ -287,6 +290,18 @@ class MainActivity : AppCompatActivity() {
     // ---------- speech out ----------
 
     private fun speak(text: String) {
+        if (brainMode == "gemini" && prefs.getBoolean("gemini_voice_on", true)) {
+            lifecycleScope.launch {
+                ui("state", "speaking")
+                val problem = voice.speak(text)
+                if (problem == null) ui("state", "idle") else speakAndroid(text)
+            }
+            return
+        }
+        speakAndroid(text)
+    }
+
+    private fun speakAndroid(text: String) {
         if (!ttsReady) { ui("state", "idle"); ui("status", "Sprachausgabe ist nicht bereit."); return }
         tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "reply")
     }
@@ -306,11 +321,11 @@ class MainActivity : AppCompatActivity() {
         @JavascriptInterface fun listen() = runOnUiThread { this@MainActivity.listen() }
         @JavascriptInterface fun ask(text: String) = runOnUiThread { if (text.isNotBlank()) handle(text.trim()) }
         @JavascriptInterface fun stop() = runOnUiThread {
-            tts?.stop(); recognizer?.cancel(); ui("state", "idle")
+            tts?.stop(); voice.stop(); recognizer?.cancel(); ui("state", "idle")
         }
         @JavascriptInterface fun settings(): String = settingsJson()
         @JavascriptInterface fun set(key: String, value: String) = runOnUiThread {
-            if (key in setOf("brain", "gemini_key", "gemini_model")) {
+            if (key in setOf("brain", "gemini_key", "gemini_model", "gemini_voice")) {
                 prefs.edit().putString(key, value.trim()).apply()
                 if (key == "brain" && value == "nano") lifecycleScope.launch { runCatching { brain.prepare() } }
                 if (key == "brain") gemini.reset()

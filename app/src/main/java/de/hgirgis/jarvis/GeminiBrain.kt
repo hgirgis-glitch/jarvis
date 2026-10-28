@@ -23,13 +23,15 @@ class GeminiBrain(private val key: () -> String, private val model: () -> String
         contents.put(userTurn)
 
         val url = "https://generativelanguage.googleapis.com/v1beta/models/${URLEncoder.encode(model().trim(), "UTF-8")}:generateContent"
+        var search = true
         repeat(MAX_STEPS) {
             val body = JSONObject()
                 .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", system()))))
                 .put("contents", contents)
-                .put("tools", JSONArray().put(JSONObject().put("functionDeclarations", Tools.declarations)))
+                .put("tools", toolList(search))
                 .put("generationConfig", JSONObject().put("temperature", 0.4))
             val r = Http.post(url, body.toString(), mapOf("x-goog-api-key" to apiKey))
+            if (r.code == 400 && search) { search = false; return@repeat }  // model without search plus functions: retry without
             if (!r.ok) return explain(r)
             val content = JSONObject(r.body).optJSONArray("candidates")?.optJSONObject(0)?.optJSONObject("content")
                 ?: return "Gemini hat keine Antwort geliefert."
@@ -52,6 +54,11 @@ class GeminiBrain(private val key: () -> String, private val model: () -> String
             contents.put(JSONObject().put("role", "user").put("parts", responses))
         }
         return "Das war mir zu viele Schritte auf einmal. Frag bitte etwas genauer."
+    }
+
+    private fun toolList(search: Boolean) = JSONArray().apply {
+        put(JSONObject().put("functionDeclarations", Tools.declarations))
+        if (search) put(JSONObject().put("google_search", JSONObject()))
     }
 
     /** Only the plain question and answer go into the history, so it stays small. */
@@ -81,10 +88,10 @@ class GeminiBrain(private val key: () -> String, private val model: () -> String
             Nutze die Werkzeuge, um in Kalender, Gmail, Google Drive und den Obsidian Notizen nachzusehen, statt zu raten.
             Bei relativen Angaben wie morgen oder nächste Woche rechne das Datum selbst aus.
             Schreibende Aktionen (Termin oder Notiz anlegen) nur, wenn Hani das ausdrücklich will; die App fragt ihn dann um Bestätigung.
-            Du hast keinen Zugriff auf das Internet, auf Wetter, Nachrichten, Börsenkurse oder Sportergebnisse. Frage Hani
-            dazu nach, antworte ehrlich, dass du dafür keine Datenquelle hast, und rate nicht.
-            Persönliche Fakten über Hani, seine Termine, Mails, Dateien oder Notizen nennst du nur, wenn ein Werkzeug sie
-            geliefert hat. Erfinde nichts. Allgemeines Wissen darfst du nutzen, kennzeichne Unsicheres aber als unsicher.
+            Du beantwortest alle Fragen von Hani. Für aktuelle Dinge wie Wetter, Nachrichten, Kurse, Ergebnisse oder Öffnungszeiten
+            nutzt du die Google Suche, und für Allgemeinwissen dein eigenes Wissen. Frage bei Wetter nach dem Ort, wenn er fehlt;
+            Hani wohnt in Hamburg. Persönliche Fakten über Hani, seine Termine, Mails, Dateien oder Notizen nennst du nur, wenn ein
+            Werkzeug sie geliefert hat. Kennzeichne Unsicheres als unsicher und erfinde keine Zahlen.
             Du kannst keine Mails senden, nichts löschen und nichts bezahlen. Sag das ehrlich, wenn danach gefragt wird.
             Wenn ein Werkzeug einen Fehler meldet, erkläre kurz, was Hani tun muss.
         """.trimIndent()

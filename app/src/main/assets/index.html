@@ -97,6 +97,7 @@
     <select id="brainSel"><option value="gemini">Gemini (Schlüssel)</option><option value="nano">Gemini Nano (auf dem Handy)</option></select>
     <input id="key" placeholder="Gemini API Schlüssel einfügen" autocomplete="off" spellcheck="false">
     <input id="model" placeholder="Modell" autocomplete="off" spellcheck="false">
+    <input id="voiceName" placeholder="Stimme, z.B. Charon, Orus, Kore, Puck, Sulafat" autocomplete="off" spellcheck="false">
     <button class="btn" id="saveBrain">Speichern</button>
     <p id="keyState" style="margin-top:10px"></p>
   </div>
@@ -325,6 +326,7 @@
     $("brainLbl").textContent = BRAIN_LABEL[st.brain] || "?";
     $("brainSel").value = st.brain || "gemini";
     $("model").value = st.gemini_model || "";
+    $("voiceName").value = st.gemini_voice || "";
     $("keyState").innerHTML = st.gemini_key_set ? '<span class="ok">Schlüssel gespeichert</span>' : '<span class="no">Kein Schlüssel hinterlegt</span>';
     $("calState").innerHTML = st.calendar ? '<span class="ok">Erlaubt</span>' : '<span class="no">Nicht erlaubt</span>';
     $("gState").innerHTML = st.google ? '<span class="ok">Verbunden</span>' : '<span class="no">Nicht verbunden</span>';
@@ -336,6 +338,7 @@
     const k = $("key").value.trim();
     if (k) native.set("gemini_key", k);
     if ($("model").value.trim()) native.set("gemini_model", $("model").value.trim());
+    if ($("voiceName").value.trim()) native.set("gemini_voice", $("voiceName").value.trim());
     native.set("brain", $("brainSel").value);
     $("key").value = "";
     setTimeout(refreshSettings, 200);

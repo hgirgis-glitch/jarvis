@@ -132,7 +132,7 @@ class NanoRouter(private val tools: Tools) {
         fun unsupported(question: String): String? {
             val q = question.lowercase()
             return if (UNSUPPORTED.any { q.contains(it) })
-                "Dafür habe ich keine Datenquelle, Sir. Ich kann nur Kalender, Notizen und mit Google Anmeldung Mails und Drive durchsuchen, und ich rate nicht."
+                "Dafür brauche ich das Internet, Sir. Bitte in den Einstellungen auf Gemini mit Schlüssel umstellen, dann beantworte ich auch das."
             else null
         }
 
