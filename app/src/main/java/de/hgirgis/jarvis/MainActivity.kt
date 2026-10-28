@@ -242,6 +242,8 @@ class MainActivity : AppCompatActivity() {
                 }
             }.getOrElse {
                 if (it is TimeoutCancellationException) (if (brainMode == "gemini") "Gemini hat nicht rechtzeitig geantwortet. Meist ist das Gratis Limit erreicht, bitte in einer Minute noch einmal fragen." else "Gemini Nano hat nicht rechtzeitig geantwortet. Bitte in den Einstellungen auf Gemini Schlüssel umstellen.")
+                else if (it is java.net.UnknownHostException || it is java.net.SocketTimeoutException || it is java.net.ConnectException)
+                    "Keine Internetverbindung, Sir. Bitte WLAN oder mobile Daten prüfen und noch einmal fragen."
                 else "Da ist etwas schiefgegangen: ${it.message}"
             }
             busy = false
